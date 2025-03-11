@@ -1,0 +1,32 @@
+name: Test Guided Piano
+
+on:
+  push:
+    branches:
+    - main
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    if: true
+    steps:
+    - uses: actions/checkout@v3
+    - name: Set Target
+      run: rustup target add wasm32-unknown-unknown
+    - name: Build
+      run: cargo build
+    - name: Run Tests
+      run: cargo test
+    - name: Install Trunk
+      run: cargo install trunk
+    - name: Install Post Build
+      run: cargo install webapp_post_build --git https://github.com/StoicDreams/WebUI
+    - name: Build Web App
+      run: |
+        # Change directory to project folder
+        cd webapp
+        # Build
+        trunk build --release

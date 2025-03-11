@@ -1,0 +1,32 @@
+[package]
+name = "webapp"
+version = "0.10.8" #syncwebui
+edition = "2024"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+webui = { git = "https://github.com/StoicDreams/WebUI", branch = "main", features = [] }
+
+[profile.dev]
+opt-level = "s"
+lto = true
+incremental = true
+
+[profile.release]
+# less code to include into binary
+panic = 'abort'
+# optimization over all codebase ( better optimization, slower build )
+codegen-units = 1
+# optimization for size ( more aggressive )
+opt-level = 'z'
+# link time optimization using using whole-program analysis
+lto = true
+
+[profile.dev.build-override]
+opt-level = "s"
+codegen-units = 16
+
+[profile.release.build-override]
+opt-level = "s"
+codegen-units = 16
