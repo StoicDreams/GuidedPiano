@@ -1,6 +1,6 @@
 # Guided Piano
 
-[WebUI Version: 0.10.10](https://github.com/StoicDreams/WebUI)
+[WebUI Version: 0.10.11](https://github.com/StoicDreams/WebUI)
 
 Piano and sheet music training.
 
