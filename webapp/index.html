@@ -5,10 +5,12 @@
 	<!-- Google tag (gtag.js) -->
 	<script async src="https://www.googletagmanager.com/gtag/js?id=G-8HV23XMZVZ"></script>
 	<script>
-		window.dataLayer = window.dataLayer || [];
-		function gtag() { dataLayer.push(arguments); }
-		gtag('js', new Date());
-		gtag('config', 'G-8HV23XMZVZ');
+		if (location.hostname !== 'localhost') {
+			window.dataLayer = window.dataLayer || [];
+			function gtag() { dataLayer.push(arguments); }
+			gtag('js', new Date());
+			gtag('config', 'G-8HV23XMZVZ');
+		}
 	</script>
 	<title>Guided Piano</title>
 	<meta charset="utf-8">
