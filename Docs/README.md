@@ -1,8 +1,8 @@
 # Guided Piano
 
-[Version: 0.1.3](https://github.com/StoicDreams/GuidedPiano)
+[Version: 0.1.4](https://github.com/StoicDreams/GuidedPiano)
 
-[WebUI Version: 0.11.3](https://github.com/StoicDreams/WebUI)
+[WebUI](https://github.com/StoicDreams/WebUI)
 
 Piano and sheet music training.
 
