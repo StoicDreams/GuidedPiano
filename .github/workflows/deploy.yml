@@ -3,7 +3,7 @@ name: Test Guided Piano
 on:
   push:
     branches:
-    - main
+      - main
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,36 +13,35 @@ jobs:
     runs-on: ubuntu-latest
     if: true
     steps:
-    - uses: actions/checkout@v3
-    - name: Set Target
-      run: |
-        rustup update
-        rustup target add wasm32-unknown-unknown
-    - name: Install Crates
-      run: |
-        cargo install wasm-pack
-    - name: Build
-      run: cargo build
-    - name: Run Tests
-      run: cargo test
-    - name: Install Trunk
-      run: cargo install trunk
-    - name: Install Post Build
-      run: cargo install webapp_post_build --git https://github.com/StoicDreams/WebUI
-    - name: Build Web App
-      run: |
-        # Change directory to project folder
-        cd webapp
-        # Build
-        trunk build --release
+      - uses: actions/checkout@v3
+      - name: Set Target
+        run: |
+          rustup update
+          rustup target add wasm32-unknown-unknown
+      - name: Cache Rust Dependencies
+        uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build
+      - name: Run Tests
+        run: cargo test
+      - name: Install Trunk
+        run: cargo install trunk
+      - name: Install Post Build
+        run: cargo install webapp_post_build --git https://github.com/StoicDreams/WebUI
+      - name: Build Web App
+        run: |
+          # Change directory to project folder
+          cd webapp
+          # Build
+          trunk build --release
   deploy:
     runs-on: ubuntu-latest
     needs: build-and-test
     steps:
-    - name: run deployment
-      env:
-        WEB_DEPLOY_METHOD: ${{ secrets.WEB_DEPLOY_METHOD }}
-        WEB_DEPLOY_API: ${{ secrets.WEB_DEPLOY_API }}
-        WEB_DEPLOY_TOKEN: ${{ secrets.WEB_DEPLOY_TOKEN }}
-      run: |
-        curl --fail-with-body -X ${WEB_DEPLOY_METHOD} "${WEB_DEPLOY_API}guidedpiano" -H "Accept: */*" -H "${WEB_DEPLOY_TOKEN}"
+      - name: run deployment
+        env:
+          WEB_DEPLOY_METHOD: ${{ secrets.WEB_DEPLOY_METHOD }}
+          WEB_DEPLOY_API: ${{ secrets.WEB_DEPLOY_API }}
+          WEB_DEPLOY_TOKEN: ${{ secrets.WEB_DEPLOY_TOKEN }}
+        run: |
+          curl --fail-with-body -X ${WEB_DEPLOY_METHOD} "${WEB_DEPLOY_API}guidedpiano" -H "Accept: */*" -H "${WEB_DEPLOY_TOKEN}"
