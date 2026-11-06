@@ -1,0 +1,14 @@
+[
+  {
+    "name": "LocalHost",
+    "icon": "emoji-desktop_computer",
+    "url": "/fc4fde2a-dc5d-4853-8e34-b609aef0154d",
+    "children": null
+  },
+  {
+    "name": "Tests",
+    "icon": "emoji-balance_scale",
+    "url": "/2d5399eb-5192-4806-a9b6-01073e5f14b7",
+    "children": null
+  }
+]

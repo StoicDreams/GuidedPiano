@@ -1,5 +1,5 @@
 
-$domain = "https://www.stoicdreams.com"
+$domain = "https://www.guidedpiano.com"
 
 $urls = [System.Collections.ArrayList]@();
 
