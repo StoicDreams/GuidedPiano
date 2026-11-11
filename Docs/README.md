@@ -1,6 +1,6 @@
 # Guided Piano
 
-[Version: 0.1.12](https://github.com/StoicDreams/GuidedPiano)
+[Version: 0.1.13](https://github.com/StoicDreams/GuidedPiano)
 
 [WebUI](https://github.com/StoicDreams/WebUI)
 
