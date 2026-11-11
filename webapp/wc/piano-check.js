@@ -25,6 +25,12 @@
     }
     TESTS.push({ channel: 1, velocity: 1, label: 'Channel 1, softest note (velocity 1)' });
     TESTS.push({ channel: 1, velocity: 127, label: 'Channel 1, loudest note (velocity 127)' });
+    TESTS.push({ channel: 1, velocity: 10, label: 'Channel 1, very soft note (velocity 10)' });
+    // Silent lights: guided play needs to light the next key without the piano playing it. Each of these turns a
+    // channel's sound down first and restores the General MIDI default afterwards.
+    TESTS.push({ channel: 5, velocity: 64, controllers: [[7, 0, 100]], label: 'Channel 5 with its volume at 0' });
+    TESTS.push({ channel: 6, velocity: 64, controllers: [[11, 0, 127]], label: 'Channel 6 with its expression at 0' });
+    TESTS.push({ channel: 7, velocity: 64, controllers: [[7, 0, 100], [11, 0, 127]], label: 'Channel 7 with volume and expression at 0' });
 
     /** Describes a MIDI message in words, or returns null for timing messages that would flood the log. */
     function describe(data) {
@@ -68,6 +74,7 @@
             t._tests = q('tbody');
             t._results = q('.results');
             t._copy = q('.copy');
+            t._notes = q('.notes-text');
             t._demoChannel = q('select.demo-channel');
             t._playScale = q('.play-scale');
             t._stop = q('.stop');
@@ -116,6 +123,7 @@
             t._output.addEventListener('change', () => t.updateResults());
             t._input.addEventListener('change', () => t.listen());
             t._copy.addEventListener('click', () => t.copyResults());
+            t._notes.addEventListener('input', () => t.updateResults());
             t._playScale.addEventListener('click', () => t.playScale());
             t._stop.addEventListener('click', () => t.stopAll());
             t._localOff.addEventListener('click', () => t.setLocal(false));
@@ -221,10 +229,15 @@
         playTest(index) {
             const t = this;
             const row = t._rows[index];
-            const { channel, velocity } = row.test;
+            const { channel, velocity, controllers = [] } = row.test;
             const status = channel - 1;
-            if (!t.send([0x90 | status, TEST_NOTE, velocity])) return;
-            t.send([0x80 | status, TEST_NOTE, 0], performance.now() + TEST_HOLD_MS);
+            if (!t.output()) return;
+            // Each controller is [number, value during the test, value to restore].
+            controllers.forEach(([number, value]) => t.send([0xB0 | status, number, value]));
+            t.send([0x90 | status, TEST_NOTE, velocity]);
+            const end = performance.now() + TEST_HOLD_MS;
+            t.send([0x80 | status, TEST_NOTE, 0], end);
+            controllers.forEach(([number, , restore]) => t.send([0xB0 | status, number, restore], end + 50));
             row.played = true;
             t.setStatus(`Played middle C on channel ${channel} for ${TEST_HOLD_MS / 1000} seconds. Tick Lit or Sound for what the piano did.`);
             t.updateResults();
@@ -292,6 +305,8 @@
                 lines.push(`${row.test.label} | ${row.lit.checked ? 'yes' : 'no'} | ${row.sound.checked ? 'yes' : 'no'}`);
             });
             if (!t._rows.some(row => row.played)) lines.push('(No tests played yet)');
+            const notes = t._notes.value.trim();
+            if (notes) lines.push('', `Notes: ${notes}`);
             return lines.join('\n');
         },
         updateResults() {
@@ -321,13 +336,14 @@
 </section>
 <section>
 <h2>2. Key lights and sound</h2>
-<p>Each test plays middle C for two seconds. Press Play, watch the light above middle C, then tick Lit if its light came on and Sound if the piano played a note.</p>
+<p>Each test plays middle C for two seconds. Press Play, watch the light above middle C, then tick Lit if its light came on and Sound if the piano played a note. The last tests turn a channel's sound down, to find a way to light a key without playing it.</p>
 <div class="table">
 <table>
 <thead><tr><th scope="col">Test</th><th scope="col">Play</th><th scope="col">Lit</th><th scope="col">Sound</th></tr></thead>
 <tbody></tbody>
 </table>
 </div>
+<label class="notes">Notes, such as the light's color for each test <textarea class="notes-text" rows="3"></textarea></label>
 <div class="row">
 <button type="button" class="copy needs-output">Copy results</button>
 </div>
@@ -387,7 +403,7 @@ flex-wrap: wrap;
 align-items: center;
 gap: 0.5em;
 }
-button, select {
+button, select, textarea {
 font: inherit;
 border-radius: var(--corners, 6px);
 padding: 0.35em 0.9em;
@@ -402,15 +418,20 @@ button:disabled {
 opacity: 0.5;
 cursor: not-allowed;
 }
-select {
+select, textarea {
 max-width: 100%;
 border: 1px solid currentColor;
 background-color: var(--color-background, #333);
 color: var(--color-background-offset, #fff);
 }
-button:focus-visible, select:focus-visible, input:focus-visible, pre:focus-visible {
+button:focus-visible, select:focus-visible, textarea:focus-visible, input:focus-visible, pre:focus-visible {
 outline: 2px solid var(--color-active, #0b78ce);
 outline-offset: 2px;
+}
+.notes {
+display: flex;
+flex-direction: column;
+align-items: stretch;
 }
 .table {
 overflow-x: auto;

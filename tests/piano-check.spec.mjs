@@ -77,6 +77,28 @@ test.describe('app-piano-check', () => {
         expect(messages[1].at).toBeGreaterThan(0);
     });
 
+    test('a silent light test turns the channel down first and restores it after the note', async ({ page }) => {
+        await fakeMidi(page);
+        await openPage(page, '/piano-check');
+        await connect(page);
+        await tool(page).getByRole('button', { name: 'Play test: Channel 7 with volume and expression at 0', exact: true }).click();
+        const messages = await sent(page);
+        expect(messages.map(m => m.bytes)).toEqual([
+            [0xB6, 7, 0], [0xB6, 11, 0], [0x96, 60, 64], [0x86, 60, 0], [0xB6, 7, 100], [0xB6, 11, 127],
+        ]);
+        expect(messages[0].at).toBeNull();
+        expect(messages[4].at).toBeGreaterThan(messages[3].at);
+        expect(messages[5].at).toBeGreaterThan(messages[3].at);
+    });
+
+    test('notes are added to the results', async ({ page }) => {
+        await fakeMidi(page);
+        await openPage(page, '/piano-check');
+        await connect(page);
+        await tool(page).getByLabel("Notes, such as the light's color").fill('Channel 1 was blue');
+        await expect(tool(page).getByLabel('Results')).toContainText('Notes: Channel 1 was blue');
+    });
+
     test('results list the played tests with what was ticked', async ({ page }) => {
         await fakeMidi(page);
         await openPage(page, '/piano-check');
