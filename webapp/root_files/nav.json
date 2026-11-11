@@ -3,5 +3,10 @@
         "name": "Home",
         "icon": "circle_emoji-house|theme:title|backing|inverted",
         "url": "/"
+    },
+    {
+        "name": "Piano Check",
+        "icon": "music",
+        "url": "/piano-check"
     }
 ]
