@@ -5,8 +5,8 @@ import { test, expect, openPage } from './support/site.mjs';
  * Sent messages are kept in window.__sent as { bytes, at }, and window.__pianoSends(bytes) plays a message from the piano.
  * Windows lists its software synth as an output too, so the fake does the same to check the piano is chosen.
  */
-async function fakeMidi(page, { deny = false, pianoName = 'Symphony Grand II' } = {}) {
-    await page.addInitScript(({ deny, pianoName }) => {
+async function fakeMidi(page, { deny = false, denySysex = false, pianoName = 'Symphony Grand II' } = {}) {
+    await page.addInitScript(({ deny, denySysex, pianoName }) => {
         window.__sent = [];
         const listeners = new Set();
         const synth = { id: 'synth', name: 'Microsoft GS Wavetable Synth', manufacturer: 'Microsoft', send() { } };
@@ -23,14 +23,14 @@ async function fakeMidi(page, { deny = false, pianoName = 'Symphony Grand II' } 
         window.__pianoSends = bytes => listeners.forEach(fn => fn({ data: new Uint8Array(bytes) }));
         navigator.requestMIDIAccess = async options => {
             window.__midiOptions = options;
-            if (deny) throw new DOMException('Denied', 'NotAllowedError');
+            if (deny || (denySysex && options?.sysex)) throw new DOMException('Denied', 'NotAllowedError');
             return {
                 outputs: new Map([[synth.id, synth], [output.id, output]]),
                 inputs: new Map([[input.id, input]]),
                 addEventListener() { },
             };
         };
-    }, { deny, pianoName });
+    }, { deny, denySysex, pianoName });
 }
 
 const tool = page => page.locator('app-piano-check');
@@ -81,7 +81,7 @@ test.describe('app-piano-check', () => {
         await fakeMidi(page);
         await openPage(page, '/piano-check');
         await connect(page);
-        await tool(page).getByRole('button', { name: 'Play test: Channel 7 with volume and expression at 0', exact: true }).click();
+        await tool(page).getByRole('button', { name: "Play test: Silent try 3: channel 7's volume and expression turned to 0 first", exact: true }).click();
         const messages = await sent(page);
         expect(messages.map(m => m.bytes)).toEqual([
             [0xB6, 7, 0], [0xB6, 11, 0], [0x96, 60, 64], [0x86, 60, 0], [0xB6, 7, 100], [0xB6, 11, 127],
@@ -89,6 +89,51 @@ test.describe('app-piano-check', () => {
         expect(messages[0].at).toBeNull();
         expect(messages[4].at).toBeGreaterThan(messages[3].at);
         expect(messages[5].at).toBeGreaterThan(messages[3].at);
+    });
+
+    test('the silent tries are listed in their own table, apart from the plain notes', async ({ page }) => {
+        await fakeMidi(page);
+        await openPage(page, '/piano-check');
+        const silent = tool(page).getByRole('table', { name: 'Light keys without sound' });
+        await expect(silent.getByRole('button', { name: 'Try' })).toHaveCount(6);
+        await expect(silent).toContainText('All Sound Off');
+        await expect(tool(page).getByRole('table', { name: 'Key lights and sound' })).not.toContainText('Silent try');
+    });
+
+    test('the All Sound Off try holds the note but cuts its sound right away', async ({ page }) => {
+        await fakeMidi(page);
+        await openPage(page, '/piano-check');
+        await connect(page);
+        await tool(page).getByRole('button', { name: /Silent try 4/ }).click();
+        const messages = await sent(page);
+        expect(messages.map(m => m.bytes)).toEqual([[0x97, 60, 64], [0xB7, 120, 0], [0x87, 60, 0]]);
+        expect(messages[1].at).toBeLessThan(messages[2].at);
+    });
+
+    test('the master volume try asks for System Exclusive, then turns the volume down and back up', async ({ page }) => {
+        await fakeMidi(page);
+        await openPage(page, '/piano-check');
+        await connect(page);
+        await tool(page).getByRole('button', { name: /Silent try 6/ }).click();
+        await expect.poll(() => page.evaluate(() => window.__midiOptions)).toEqual({ sysex: true });
+        await expect.poll(async () => (await sent(page)).length).toBe(4);
+        const messages = await sent(page);
+        expect(messages.map(m => m.bytes)).toEqual([
+            [0xF0, 0x7F, 0x7F, 0x04, 0x01, 0, 0, 0xF7],
+            [0x90, 60, 64],
+            [0x80, 60, 0],
+            [0xF0, 0x7F, 0x7F, 0x04, 0x01, 0x7F, 0x7F, 0xF7],
+        ]);
+        expect(messages[3].at).toBeGreaterThan(messages[2].at);
+    });
+
+    test('says so when the browser refuses System Exclusive', async ({ page }) => {
+        await fakeMidi(page, { denySysex: true });
+        await openPage(page, '/piano-check');
+        await connect(page);
+        await tool(page).getByRole('button', { name: /Silent try 6/ }).click();
+        await expect(tool(page).getByRole('status')).toContainText("didn't allow System Exclusive");
+        expect(await sent(page)).toEqual([]);
     });
 
     test('notes are added to the results', async ({ page }) => {
@@ -138,14 +183,16 @@ test.describe('app-piano-check', () => {
         expect(allNotesOff.map(m => m.bytes[0] & 0x0F)).toEqual([...Array(16).keys()]);
     });
 
-    test('Local Control turned off is turned back on when the tool goes away', async ({ page }) => {
+    test('Local Control is sent on every channel, and turned back on when the tool goes away', async ({ page }) => {
         await fakeMidi(page);
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: 'Turn Local Control off' }).click();
-        expect((await sent(page)).at(-1).bytes).toEqual([0xB0, 122, 0]);
+        const localOff = (await sent(page)).filter(m => (m.bytes[0] & 0xF0) === 0xB0 && m.bytes[1] === 122);
+        expect(localOff.map(m => m.bytes[0] & 0x0F)).toEqual([...Array(16).keys()]);
+        expect(localOff.every(m => m.bytes[2] === 0)).toBe(true);
         await page.evaluate(() => document.querySelector('app-piano-check').remove());
-        await expect.poll(async () => (await sent(page)).at(-1).bytes).toEqual([0xB0, 122, 127]);
+        await expect.poll(async () => (await sent(page)).at(-1).bytes).toEqual([0xBF, 122, 127]);
     });
 
     test('moving the tool on the page leaves the piano as it is', async ({ page }) => {

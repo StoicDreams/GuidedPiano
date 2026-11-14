@@ -18,19 +18,27 @@
     const SCALE = [60, 62, 64, 65, 67, 69, 71, 72];
     const LOG_LIMIT = 40;
 
-    /** Each test plays middle C once. Channels are 1-16 as pianos show them; MIDI bytes use 0-15. */
+    /**
+     * Each test plays middle C once. Channels are 1-16 as pianos show them; MIDI bytes use 0-15.
+     * `table` is the table the test is listed in: 'lights' for plain notes, 'silent' for ways to light a key without sound.
+     * `controllers` are [number, value during the test, value restored afterwards].
+     */
     const TESTS = [];
     for (let channel = 1; channel <= 16; channel++) {
-        TESTS.push({ channel, velocity: 64, label: `Channel ${channel}${channel === 10 ? ' (drums in General MIDI)' : ''}` });
+        TESTS.push({ table: 'lights', channel, velocity: 64, label: `Channel ${channel}${channel === 10 ? ' (drums in General MIDI)' : ''}` });
     }
-    TESTS.push({ channel: 1, velocity: 1, label: 'Channel 1, softest note (velocity 1)' });
-    TESTS.push({ channel: 1, velocity: 127, label: 'Channel 1, loudest note (velocity 127)' });
-    TESTS.push({ channel: 1, velocity: 10, label: 'Channel 1, very soft note (velocity 10)' });
-    // Silent lights: guided play needs to light the next key without the piano playing it. Each of these turns a
-    // channel's sound down first and restores the General MIDI default afterwards.
-    TESTS.push({ channel: 5, velocity: 64, controllers: [[7, 0, 100]], label: 'Channel 5 with its volume at 0' });
-    TESTS.push({ channel: 6, velocity: 64, controllers: [[11, 0, 127]], label: 'Channel 6 with its expression at 0' });
-    TESTS.push({ channel: 7, velocity: 64, controllers: [[7, 0, 100], [11, 0, 127]], label: 'Channel 7 with volume and expression at 0' });
+    TESTS.push({ table: 'lights', channel: 1, velocity: 1, label: 'Channel 1, softest note (velocity 1)' });
+    TESTS.push({ table: 'lights', channel: 1, velocity: 10, label: 'Channel 1, very soft note (velocity 10)' });
+    TESTS.push({ table: 'lights', channel: 1, velocity: 127, label: 'Channel 1, loudest note (velocity 127)' });
+    // Guided play needs to light the next key without the piano playing it. Each of these tries a different way.
+    TESTS.push({ table: 'silent', channel: 5, velocity: 64, controllers: [[7, 0, 100]], label: "Silent try 1: channel 5's volume turned to 0 first" });
+    TESTS.push({ table: 'silent', channel: 6, velocity: 64, controllers: [[11, 0, 127]], label: "Silent try 2: channel 6's expression turned to 0 first" });
+    TESTS.push({ table: 'silent', channel: 7, velocity: 64, controllers: [[7, 0, 100], [11, 0, 127]], label: "Silent try 3: channel 7's volume and expression turned to 0 first" });
+    TESTS.push({ table: 'silent', channel: 8, velocity: 64, soundOff: true, label: 'Silent try 4: the note, then All Sound Off right away (channel 8)' });
+    TESTS.push({ table: 'silent', channel: 4, velocity: 64, label: "Silent try 5: the piano's MIDI Input Volume set to 0 in its menu first (channel 4)" });
+    TESTS.push({ table: 'silent', channel: 1, velocity: 64, masterVolume: true, label: 'Silent try 6: master volume turned to 0 first (asks for extra permission)' });
+    // Universal System Exclusive master volume, with the 14-bit level as its last two data bytes (low, then high).
+    const masterVolume = level => [0xF0, 0x7F, 0x7F, 0x04, 0x01, level & 0x7F, level >> 7, 0xF7];
 
     /** Describes a MIDI message in words, or returns null for timing messages that would flood the log. */
     function describe(data) {
@@ -71,7 +79,7 @@
             t._connect = q('.connect');
             t._output = q('select.output');
             t._input = q('select.input');
-            t._tests = q('tbody');
+            t._tables = { lights: q('tbody.lights'), silent: q('tbody.silent') };
             t._results = q('.results');
             t._copy = q('.copy');
             t._notes = q('.notes-text');
@@ -99,7 +107,7 @@
                 const play = document.createElement('button');
                 play.type = 'button';
                 play.className = 'needs-output';
-                play.textContent = 'Play';
+                play.textContent = test.table === 'silent' ? 'Try' : 'Play';
                 play.setAttribute('aria-label', `Play test: ${test.label}`);
                 play.addEventListener('click', () => t.playTest(index));
                 playCell.append(play);
@@ -113,7 +121,7 @@
                     return { cell, box };
                 });
                 row.append(name, playCell, checks[0].cell, checks[1].cell);
-                t._tests.append(row);
+                t._tables[test.table].append(row);
                 return { test, play, lit: checks[0].box, sound: checks[1].box, played: false };
             });
 
@@ -226,18 +234,43 @@
             output.send(bytes, at);
             return true;
         },
-        playTest(index) {
+        /**
+         * System Exclusive needs its own permission, so it is only asked for when a test needs it.
+         * Returns the chosen piano's port from that access, or null when the browser refuses.
+         */
+        async sysexOutput() {
+            const t = this;
+            const current = t.output();
+            if (!current) return null;
+            if (!t._sysexAccess) {
+                try {
+                    t._sysexAccess = await navigator.requestMIDIAccess({ sysex: true });
+                } catch (error) {
+                    t.setStatus(`The browser didn't allow System Exclusive messages (${error?.name || 'error'}), so this try can't run.`);
+                    return null;
+                }
+            }
+            const outputs = t._sysexAccess.outputs;
+            return outputs.get(current.id) || [...outputs.values()].find(port => port.name === current.name) || null;
+        },
+        async playTest(index) {
             const t = this;
             const row = t._rows[index];
-            const { channel, velocity, controllers = [] } = row.test;
+            const { channel, velocity, controllers = [], soundOff, masterVolume: useMaster } = row.test;
             const status = channel - 1;
-            if (!t.output()) return;
-            // Each controller is [number, value during the test, value to restore].
-            controllers.forEach(([number, value]) => t.send([0xB0 | status, number, value]));
-            t.send([0x90 | status, TEST_NOTE, velocity]);
-            const end = performance.now() + TEST_HOLD_MS;
-            t.send([0x80 | status, TEST_NOTE, 0], end);
-            controllers.forEach(([number, , restore]) => t.send([0xB0 | status, number, restore], end + 50));
+            const output = useMaster ? await t.sysexOutput() : t.output();
+            if (!output) return;
+            const send = (bytes, at) => output.send(bytes, at);
+            if (useMaster) send(masterVolume(0));
+            controllers.forEach(([number, value]) => send([0xB0 | status, number, value]));
+            send([0x90 | status, TEST_NOTE, velocity]);
+            const start = performance.now();
+            // All Sound Off cuts the sound at once. The note stays held, so its light may stay on.
+            if (soundOff) send([0xB0 | status, 120, 0], start + 20);
+            const end = start + TEST_HOLD_MS;
+            send([0x80 | status, TEST_NOTE, 0], end);
+            controllers.forEach(([number, , restore]) => send([0xB0 | status, number, restore], end + 50));
+            if (useMaster) send(masterVolume(0x3FFF), end + 50);
             row.played = true;
             t.setStatus(`Played middle C on channel ${channel} for ${TEST_HOLD_MS / 1000} seconds. Tick Lit or Sound for what the piano did.`);
             t.updateResults();
@@ -269,12 +302,16 @@
         },
         setLocal(on) {
             const t = this;
-            // Local Control is controller 122. Pianos read it on the channel their keyboard uses, which is usually 1.
-            if (!t.send([0xB0, 122, on ? 127 : 0])) return;
+            const output = t.output();
+            if (!output) return;
+            // Local Control is controller 122. Pianos differ in which channel they read it on, so it goes to all of them.
+            for (let status = 0; status < 16; status++) {
+                output.send([0xB0 | status, 122, on ? 127 : 0]);
+            }
             t._localTurnedOff = !on;
             t.setStatus(on
-                ? 'Local Control is on. The piano plays its own keys again.'
-                : 'Local Control is off. The piano stays silent when you play, until you turn it back on or leave this page.');
+                ? 'Sent Local Control on, on every channel.'
+                : "Sent Local Control off, on every channel. Play a key on the piano: if it still makes a sound, the piano ignores this message, and only its own MIDI Local setting can turn it off.");
         },
         /** Leaves the piano as it was found: no stuck notes and its keyboard connected to its sound. */
         release() {
@@ -336,13 +373,27 @@
 </section>
 <section>
 <h2>2. Key lights and sound</h2>
-<p>Each test plays middle C for two seconds. Press Play, watch the light above middle C, then tick Lit if its light came on and Sound if the piano played a note. The last tests turn a channel's sound down, to find a way to light a key without playing it.</p>
+<p>Each test plays middle C for two seconds. Press Play, watch the light above middle C, then tick Lit if its light came on and Sound if the piano played a note. These all play a sound. Section 3 looks for a way to light a key without one.</p>
 <div class="table">
-<table>
+<table aria-label="Key lights and sound">
 <thead><tr><th scope="col">Test</th><th scope="col">Play</th><th scope="col">Lit</th><th scope="col">Sound</th></tr></thead>
-<tbody></tbody>
+<tbody class="lights"></tbody>
 </table>
 </div>
+</section>
+<section>
+<h2>3. Light keys without sound</h2>
+<p>Guided play needs to light the next key to play without the piano playing it. Each try below sends middle C in a different way that might stay silent. Press Try, then tick Lit if the light came on and Sound if you heard the note. A try with Lit ticked and Sound not ticked is the one guided play can use.</p>
+<p>Before try 5, set MIDI Input Volume to 0 in the piano's settings, and set it back afterwards. Try 6 asks the browser for permission to send System Exclusive messages, and turns the master volume back up when it ends.</p>
+<div class="table">
+<table aria-label="Light keys without sound">
+<thead><tr><th scope="col">Try</th><th scope="col">Send</th><th scope="col">Lit</th><th scope="col">Sound</th></tr></thead>
+<tbody class="silent"></tbody>
+</table>
+</div>
+</section>
+<section>
+<h2>4. Results</h2>
 <label class="notes">Notes, such as the light's color for each test <textarea class="notes-text" rows="3"></textarea></label>
 <div class="row">
 <button type="button" class="copy needs-output">Copy results</button>
@@ -350,7 +401,7 @@
 <pre class="results" tabindex="0" aria-label="Results"></pre>
 </section>
 <section>
-<h2>3. Demo through the piano</h2>
+<h2>5. Demo through the piano</h2>
 <p>Plays a scale with the piano's own grand piano sound. The piano's keyboard sends on channels 1 to 3, so a channel above them keeps demo notes apart from what you play.</p>
 <div class="row">
 <label>Demo channel <select class="demo-channel"></select></label>
@@ -359,15 +410,15 @@
 </div>
 </section>
 <section>
-<h2>4. Local Control</h2>
-<p>With Local Control off, the piano's keys stop playing its own sound, and only notes it receives make sound. Try the light tests again with it off. It turns back on when you leave this page.</p>
+<h2>6. Local Control</h2>
+<p>Local Control decides whether the piano's own keys make a sound. It doesn't silence notes this page sends. Turning it off lets an app decide what the piano plays when you press a key. These buttons send it on every channel, and it turns back on when you leave this page. Some pianos ignore it and only change it from their own menu.</p>
 <div class="row">
 <button type="button" class="local-off needs-output">Turn Local Control off</button>
 <button type="button" class="local-on needs-output">Turn Local Control on</button>
 </div>
 </section>
 <section>
-<h2>5. What the piano sends</h2>
+<h2>7. What the piano sends</h2>
 <p>Play some keys. The newest message is at the top. Notes from the demo or the tests show here too if the piano echoes them back.</p>
 <div class="row">
 <button type="button" class="clear-log">Clear</button>
@@ -463,7 +514,7 @@ background-color: color-mix(in srgb, currentColor 10%, transparent);
 margin: 0;
 max-height: 20em;
 overflow-y: auto;
-font-family: monospace;
+font-family: var(--font-family-mono, monospace);
 }
 </style>
 `
