@@ -61,7 +61,7 @@ test.describe('app-piano-check', () => {
         await fakeMidi(page);
         await openPage(page, '/piano-check');
         await connect(page);
-        expect(await page.evaluate(() => window.__midiOptions)).toEqual({ sysex: false });
+        await expect.poll(() => page.evaluate(() => window.__midiOptions)).toEqual({ sysex: false });
         await expect(tool(page).getByLabel('Send to')).toHaveValue('piano-out');
         await expect(tool(page).getByLabel('Listen to')).toHaveValue('piano-in');
     });
@@ -71,6 +71,8 @@ test.describe('app-piano-check', () => {
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: 'Play test: Channel 5', exact: true }).click();
+        // The status is the last thing a test sets, after every message has been sent or scheduled.
+        await expect(tool(page).getByRole('status')).toContainText('Played middle C on channel 5');
         const messages = await sent(page);
         expect(messages[0]).toEqual({ bytes: [0x94, 60, 64], at: null });
         expect(messages[1].bytes).toEqual([0x84, 60, 0]);
@@ -82,6 +84,7 @@ test.describe('app-piano-check', () => {
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: "Play test: Silent try 3: channel 7's volume and expression turned to 0 first", exact: true }).click();
+        await expect(tool(page).getByRole('status')).toContainText('Played middle C on channel 7');
         const messages = await sent(page);
         expect(messages.map(m => m.bytes)).toEqual([
             [0xB6, 7, 0], [0xB6, 11, 0], [0x96, 60, 64], [0x86, 60, 0], [0xB6, 7, 100], [0xB6, 11, 127],
@@ -105,6 +108,7 @@ test.describe('app-piano-check', () => {
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: /Silent try 4/ }).click();
+        await expect(tool(page).getByRole('status')).toContainText('Played middle C on channel 8');
         const messages = await sent(page);
         expect(messages.map(m => m.bytes)).toEqual([[0x97, 60, 64], [0xB7, 120, 0], [0x87, 60, 0]]);
         expect(messages[1].at).toBeLessThan(messages[2].at);
@@ -133,7 +137,7 @@ test.describe('app-piano-check', () => {
         await connect(page);
         await tool(page).getByRole('button', { name: /Silent try 6/ }).click();
         await expect(tool(page).getByRole('status')).toContainText("didn't allow System Exclusive");
-        expect(await sent(page)).toEqual([]);
+        await expect.poll(() => sent(page)).toEqual([]);
     });
 
     test('notes are added to the results', async ({ page }) => {
@@ -165,6 +169,7 @@ test.describe('app-piano-check', () => {
         await connect(page);
         await expect(tool(page).getByLabel('Demo channel')).toHaveValue('4');
         await tool(page).getByRole('button', { name: 'Play scale' }).click();
+        await expect(tool(page).getByRole('status')).toContainText('Playing a C major scale on channel 4');
         const messages = await sent(page);
         expect(messages[0].bytes).toEqual([0xC3, 0]);
         const noteOns = messages.filter(m => m.bytes[0] === 0x93).map(m => m.bytes[1]);
@@ -178,7 +183,8 @@ test.describe('app-piano-check', () => {
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: 'Stop all notes' }).click();
-        expect(await page.evaluate(() => window.__cleared)).toBe(1);
+        await expect(tool(page).getByRole('status')).toContainText('Sent All Notes Off on every channel.');
+        await expect.poll(() => page.evaluate(() => window.__cleared)).toBe(1);
         const allNotesOff = (await sent(page)).filter(m => (m.bytes[0] & 0xF0) === 0xB0 && m.bytes[1] === 123);
         expect(allNotesOff.map(m => m.bytes[0] & 0x0F)).toEqual([...Array(16).keys()]);
     });
@@ -188,6 +194,7 @@ test.describe('app-piano-check', () => {
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: 'Turn Local Control off' }).click();
+        await expect(tool(page).getByRole('status')).toContainText('Sent Local Control off');
         const localOff = (await sent(page)).filter(m => (m.bytes[0] & 0xF0) === 0xB0 && m.bytes[1] === 122);
         expect(localOff.map(m => m.bytes[0] & 0x0F)).toEqual([...Array(16).keys()]);
         expect(localOff.every(m => m.bytes[2] === 0)).toBe(true);
@@ -200,13 +207,17 @@ test.describe('app-piano-check', () => {
         await openPage(page, '/piano-check');
         await connect(page);
         await tool(page).getByRole('button', { name: 'Turn Local Control off' }).click();
+        await expect(tool(page).getByRole('status')).toContainText('Sent Local Control off');
         const before = (await sent(page)).length;
-        await page.evaluate(async () => {
+        await page.evaluate(() => {
             const el = document.querySelector('app-piano-check');
             el.parentNode.append(el);
-            await new Promise(resolve => setTimeout(resolve, 50));
         });
-        expect((await sent(page)).length).toBe(before);
+        // The tool checks whether it has really gone in a microtask, which has run by the time evaluate returns.
+        await expect.poll(async () => (await sent(page)).length).toBe(before);
+        // It is still the same connected tool: taking it away now does release the piano.
+        await page.evaluate(() => document.querySelector('app-piano-check').remove());
+        await expect.poll(async () => (await sent(page)).at(-1).bytes).toEqual([0xBF, 122, 127]);
     });
 
     test('shows what the piano sends, newest first, as text', async ({ page }) => {
@@ -222,6 +233,7 @@ test.describe('app-piano-check', () => {
         await expect(items).toHaveText(['Note off C4 (60), channel 1', 'Note on C4 (60), velocity 100, channel 1']);
         await expect(tool(page).getByLabel('Send to')).toContainText('<img src=x');
         await expect(tool(page).locator('img')).toHaveCount(0);
-        expect(await page.evaluate(() => window.__attacked)).toBeUndefined();
+        // No image element was made from the name, so nothing can run its onerror.
+        await expect.poll(() => page.evaluate(() => window.__attacked)).toBeUndefined();
     });
 });
